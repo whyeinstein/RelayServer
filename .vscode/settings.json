@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        ".clang-format": "yaml",
+        "*.md": "markdown",
+    },
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "editor.formatOnSave": true,
+    "clangd.path": "/usr/bin/clangd",
+    "clangd.arguments": [
+        "--log=verbose",
+        "--header-insertion=never",
+        "--query-driver=/usr/bin/g++*"
+    ]
+}
