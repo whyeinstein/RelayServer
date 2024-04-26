@@ -1,5 +1,32 @@
 #include "Client.h"
 
+Client::Client(const std::string& id, uint8_t messageType, const char* data,
+               uint32_t dataLength, size_t msg_size)
+    : epoll_fd(-1),
+      client_socket(-1),
+      id(id),
+      client_name("client" + id),
+      client_message(messageType, data, dataLength),
+      msg_data_size(msg_size) {
+  // 初始化两种监听模式
+  listen_ev[0].data.fd = epoll_fd;
+  listen_ev[1].data.fd = epoll_fd;
+  listen_ev[0].events = EPOLLIN;
+  listen_ev[1].events = EPOLLIN | EPOLLOUT;
+
+  // 初始化消息，缓冲区大小
+  msg_size =
+      client_message.getData().size() + sizeof(client_message.getHeader());
+  recv_size = 100 * msg_size;
+  recv_buffer.resize(msg_size);
+
+  // 初始化缓冲区
+  std::memcpy(recv_buffer.data(), &(client_message.getHeader()),
+              sizeof(ClientMessageHeader));
+  std::memcpy(recv_buffer.data() + sizeof(ClientMessageHeader),
+              client_message.getData().data(), client_message.getData().size());
+}
+
 void Client::ConnectToServer(const char* server_ip, int server_port) {
   // 创建客户端套接字
   client_socket = socket(AF_INET, SOCK_STREAM, 0);

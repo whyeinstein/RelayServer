@@ -2,7 +2,6 @@
 
 #include "Message.h"
 #include "Server.h"
-#include "Stress.h"
 
 bool Server::running = true;
 
