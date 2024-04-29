@@ -1,6 +1,10 @@
 #ifndef REPLY_SERVER
 #define REPLY_SERVER
 
+#ifndef DEBUG
+#define DEBUG
+#endif
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/epoll.h>
@@ -42,7 +46,7 @@ class Server {
   std::unordered_map<int, std::vector<char>>
       recv_buffers;  //套接字到缓冲区的映射
   epoll_event event;
-  size_t buf_size = 20 * 1024;  // 缓存区大小
+  size_t buf_size = 22 * 1024;  // 缓存区大小
   epoll_event listen_ev[2];     // 两种监听模式
   static bool running;
 };

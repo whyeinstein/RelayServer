@@ -17,53 +17,73 @@
 #include "LoadGenerator.h"
 #include "Message.h"
 
-const char *server_ip = "127.0.0.1";
-const int server_port = 8849;
+bool Client::running = true;
 
-int main() {
-  size_t max_msg_size = 10 * 1024;  // 10KB
-  int num_clients = 10000;
-  std::cout << "输入客户端数量" << std::endl;
-  std::cin >> num_clients;
+void LoadGenerator::AddClient(Client &client, int loop_num) {
+  // 创建一个新线程来处理客户端的事件
+  client_threads.push_back(std::thread([&client, this, loop_num]() {
+    client.EventLoop(loop_num);
 
-  int max_string_length = 50;
-  char **pdata = new char *[num_clients];  // 分配指针数组
-
-  for (int i = 0; i < num_clients; i++) {
-    pdata[i] = new char[max_string_length];  // 为每个字符串分配内存
-    snprintf(pdata[i], max_string_length, "Hello from Client %d",
-             i);  // 使用 snprintf 以防止溢出
-  }
-
-  LoadGenerator load_generator;
-
-  std::vector<Client> clients;
-
-  for (int i = 0; i < num_clients; ++i) {
-    clients.emplace_back(Client(std::to_string(i), 1, pdata[i],
-                                std::strlen(pdata[i]), max_msg_size));
-    clients.back().ConnectToServer(server_ip, server_port);
-  }
-  std::cout << "连接完成" << std::endl;
-  sleep(5);
-
-  for (int i = 0; i < (int)clients.size(); ++i) {
-    load_generator.AddClient(clients[i]);
-  }
-
-  load_generator.WaitAll();
-
-  for (int i = 0; i < num_clients; i++) {
-    delete[] pdata[i];  // 释放每个字符串的内存
-  }
-  delete[] pdata;  // 释放指针数组的内存
-
-  return 0;
+    // 记录当前线程的数据
+    std::lock_guard<std::mutex> lock(mtx);
+    avr_time_per_msg_ += client.GetAvrTimePerMsg();
+    client_num_++;
+    all_msg_count += client.GetAllMsgCount();
+  }));
 }
-// Message message1(1, data[0], std::strlen(data[0]));  // 1 表示数据报文
-// Message message2(1, data[1], std::strlen(data[1]));  // 1 表示数据报文
-// Message message3(1, data[2], std::strlen(data[2]));  // 1 表示数据报文
-// Message message4(1, data[3], std::strlen(data[3]));  // 1 表示数据报文
 
-// const char *data[] = {"Hello from Client 0", "Hello from Client 1",
-//                       "Hello from Client 2", "Hello from Client 3"};
+void LoadGenerator::AddDynamicClient(Client &client, int clients_index,
+                                     int client_id) {
+  std::default_random_engine random_generator;
+  std::uniform_int_distribution<int> distribution(100, 200);
+  int randomNumber = distribution(random_generator);
+  if (randomNumber % 2 == 1) {
+    randomNumber += 1;  // 保证为偶数
+  }
+
+  // 创建一个 pair 并添加到数组中
+  dynamic_client_threads.push_back(
+      std::make_tuple(std::thread(), false, clients_index, client_id));
+
+  // 启动线程
+  std::get<0>(dynamic_client_threads.back()) =
+      std::thread([&client, this, &randomNumber]() {
+        client.EventLoop(randomNumber);
+
+        // 记录当前线程的数据
+        std::lock_guard<std::mutex> lock(mtx);
+        avr_time_per_msg_ += client.GetAvrTimePerMsg();
+        client_num_++;
+        all_msg_count += client.GetAllMsgCount();
+
+        // 线程结束，将结束标志设为 true
+        std::get<1>(dynamic_client_threads.back()) = true;
+      });
+}
+
+void LoadGenerator::WaitAll() {
+  for (auto &t : client_threads) {
+    if (t.joinable()) {
+      t.join();
+    }
+  }
+
+  // 总用时
+  end_time = std::chrono::high_resolution_clock::now();
+  diff_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
+                                                                    start_time);
+
+  // 每秒平均转发报文数
+  avr_msg =
+      1000 * all_msg_count /
+      (diff_time.count() +
+       std::numeric_limits<
+           double>::epsilon());  //乘1000将毫秒转化为秒，分母加极小值防止为0
+
+  std::cout << "每秒平均转发报文数：" << avr_msg << "" << std::endl;
+
+  // 计算总平均时间
+  avr_time_per_msg_ = avr_time_per_msg_ / client_num_;
+
+  std::cout << "每报文平均延迟：" << avr_time_per_msg_ << "ms" << std::endl;
+}

@@ -1,5 +1,7 @@
 #include "Server.h"
 
+#include "Message.h"
+
 Server::Server(const char *ip, int port) : server_ip(ip), server_port(port) {
   // 初始化两种监听模式
   listen_ev[0].data.fd = epoll_fd;
@@ -80,14 +82,18 @@ void Server::DelCliSocket(int current_fd, int client_id) {
   //删除映射关系
   auto it1 = sessionMap.find(current_fd);
   if (it1 != sessionMap.end()) {
+#ifdef DEBUG
     std::cout << "客户端断开连接id: " << it1->second << std::endl;
+#endif
     sessionMap.erase(it1);
   }
 
   //删除反向映射
   auto it2 = rSessionMap.find(client_id);
   if (it2 != sessionMap.end()) {
+#ifdef DEBUG
     std::cout << "对应套接字删除: " << it2->second << std::endl;
+#endif
     rSessionMap.erase(it2);
   }
   close(current_fd);
@@ -110,7 +116,9 @@ void Server::run() {
       perror("Error waiting for events");
       break;
     }
+#ifdef DEBUG
     std::cout << "事件" << numEvents << "发生" << std::endl;
+#endif
     //处理事件
     for (int i = 0; i < numEvents; ++i) {
       int current_fd = events[i].data.fd;
@@ -121,8 +129,10 @@ void Server::run() {
         int client_socket =
             accept(server_socket, reinterpret_cast<sockaddr *>(&client_address),
                    &client_addr_len);
+#ifdef DEBUG
         std::cout << "Accepted connection from "
                   << inet_ntoa(client_address.sin_addr) << std::endl;
+#endif
 
         // 接收客户端发送的会话 ID
         char session_id[64];
@@ -141,7 +151,9 @@ void Server::run() {
         sessionMap[client_socket] = session_id_int;
         rSessionMap[session_id_int] = client_socket;
         recv_buffers[client_socket] = std::vector<char>();
+#ifdef DEBUG
         std::cout << "注册会话id: " << session_id_int << std::endl;
+#endif
         event.events = EPOLLIN;
         event.data.fd = client_socket;
 
@@ -156,15 +168,6 @@ void Server::run() {
         const char *ack_msg = "ACK";
         send(client_socket, ack_msg, strlen(ack_msg), 0);
 
-        // 设置为非阻塞模式
-        // int flags = fcntl(server_socket, F_GETFL, 0);
-        // if (flags == -1) {
-        //   throw std::runtime_error("获取文件状态标志失败");
-        // }
-        // flags |= O_NONBLOCK;
-        // if (fcntl(server_socket, F_SETFL, flags) == -1) {
-        //   throw std::runtime_error("设置文件状态标志失败");
-        // }
         int flags = fcntl(client_socket, F_GETFL, 0);
         if (flags == -1) {
           throw std::runtime_error("获取文件状态标志失败");
@@ -194,28 +197,6 @@ void Server::run() {
               continue;
             }
           } else if (bytesRead == 0) {
-            // int ecrn =
-            //     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, current_fd, nullptr);
-            // if (ecrn == -1) {
-            //   std::cerr << "Failed to remove client socket from epoll."
-            //             << std::endl;
-            //   exit(-1);
-            // }
-
-            // //删除映射关系
-            // auto it1 = sessionMap.find(current_fd);
-            // if (it1 != sessionMap.end()) {
-            //   std::cout << "客户端断开连接id: " << it1->second <<
-            //   std::endl; sessionMap.erase(it1);
-            // }
-
-            // //删除反向映射
-            // auto it2 = rSessionMap.find(client_id);
-            // if (it2 != sessionMap.end()) {
-            //   std::cout << "对应套接字删除: " << it2->second << std::endl;
-            //   rSessionMap.erase(it2);
-            // }
-            // close(current_fd);
             DelCliSocket(current_fd, client_id);
             continue;
           }
@@ -228,9 +209,11 @@ void Server::run() {
           }
           buffer[bytesRead] = '\0';
 
-          // 输出
-          std::cout << "Received message from client" << client_id << ": "
+// 输出
+#ifdef DEBUG
+          std::cout << " Received message from client " << client_id << ": "
                     << buffer << std::endl;
+#endif
         }
         if (events[i].events & EPOLLOUT) {
           // 判断对方是否存在
@@ -241,14 +224,24 @@ void Server::run() {
                   ? (client_id + 1)
                   : (client_id - 1);  //偶数加一,奇数减一，获取目标客户端id
 
+          // debug
+          // target_id = 0;
+
           // 键不存在
           auto it = rSessionMap.find(target_id);
           if (it == rSessionMap.end()) {
-            target_id = client_id;
             std::string message = "The counterpart is disconnected";
+            Message msg(1, message.c_str(), message.size(),
+                        std::to_string(target_id));
+
+            // 序列化并加入缓冲区
+            std::vector<char> data_to_send = msg.serialize();
             recv_buffers[current_fd].clear();
             recv_buffers[current_fd].insert(recv_buffers[current_fd].begin(),
-                                            message.begin(), message.end());
+                                            data_to_send.begin(),
+                                            data_to_send.end());
+            // 将目的id置为当前套接字对应的id
+            target_id = client_id;
           }
 
           // ？？？增加判断条件：目的client正常连接???
@@ -256,8 +249,10 @@ void Server::run() {
             ssize_t bytesSent =
                 send(rSessionMap[target_id], recv_buffers[current_fd].data(),
                      recv_buffers[current_fd].size(), MSG_NOSIGNAL);
+#ifdef DEBUG
             std::cout << client_id << "Sending message to "
                       << " to client " << target_id << std::endl;
+#endif
             if ((bytesSent) < 0) {
               if (errno != EWOULDBLOCK) {
                 std::cerr << "发送出错，errno值为: " << errno
