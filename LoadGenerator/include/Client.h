@@ -2,7 +2,7 @@
 #define CLIENT
 
 #ifndef DEBUG
-#define DEBUG
+// #define DEBUG
 #endif
 
 #include <arpa/inet.h>

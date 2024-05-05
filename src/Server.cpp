@@ -72,6 +72,49 @@ void Server::ModListen(int i, int current_fd) {
 
 // 清理断开的套接字
 void Server::DelCliSocket(int current_fd, int client_id) {
+  // 临走前告诉对方自己已经下线
+  // 判断对方是否存在
+  int target_id = -1;
+
+  target_id = (client_id % 2 == 0)
+                  ? (client_id + 1)
+                  : (client_id - 1);  //偶数加一,奇数减一，获取目标客户端id
+
+  // 对方还在线
+  auto it = rSessionMap.find(target_id);
+  if (it != rSessionMap.end()) {
+    std::string message = "The counterpart is disconnected";
+    Message msg(1, message.c_str(), message.size(), std::to_string(target_id));
+
+    // 序列化并加入缓冲区
+    std::vector<char> data_to_send = msg.serialize();
+    recv_buffers[current_fd].clear();
+    recv_buffers[current_fd].insert(recv_buffers[current_fd].begin(),
+                                    data_to_send.begin(), data_to_send.end());
+
+    // 因为自己即将下线，因此必须将消息send出去，否则epoll不会监听当前套接字，缓冲区中内容无法发送
+
+    ssize_t bytesSent =
+        send(rSessionMap[target_id], recv_buffers[current_fd].data(),
+             recv_buffers[current_fd].size(), MSG_NOSIGNAL);
+#ifdef DEBUG
+    std::cout << client_id << " Sending offline message to "
+              << " client " << target_id << std::endl;
+#endif
+    // 差错处理
+    if ((bytesSent) < 0) {
+      if (errno != EWOULDBLOCK) {
+        std::cerr << "发送出错，errno值为: " << errno
+                  << ". 错误信息: " << strerror(errno) << std::endl;
+        if (errno == EPIPE) {
+          // 对方已经关闭了连接，关闭我们的套接字并进行清理
+          //...
+          std::cerr << "对方已经关闭了连接" << std::endl;
+        }
+      }
+    }
+  }
+
   // 从epoll中删除
   int ecrn = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, current_fd, nullptr);
   if (ecrn == -1) {
@@ -129,10 +172,10 @@ void Server::run() {
         int client_socket =
             accept(server_socket, reinterpret_cast<sockaddr *>(&client_address),
                    &client_addr_len);
-#ifdef DEBUG
+        // #ifdef DEBUG
         std::cout << "Accepted connection from "
                   << inet_ntoa(client_address.sin_addr) << std::endl;
-#endif
+        // #endif
 
         // 接收客户端发送的会话 ID
         char session_id[64];
@@ -151,9 +194,9 @@ void Server::run() {
         sessionMap[client_socket] = session_id_int;
         rSessionMap[session_id_int] = client_socket;
         recv_buffers[client_socket] = std::vector<char>();
-#ifdef DEBUG
+        // #ifdef DEBUG
         std::cout << "注册会话id: " << session_id_int << std::endl;
-#endif
+        // #endif
         event.events = EPOLLIN;
         event.data.fd = client_socket;
 
@@ -182,7 +225,7 @@ void Server::run() {
           int client_id = sessionMap[current_fd];
 
           // 处理来自客户端的数据
-          char buffer[1024];
+          char buffer[128 * 1024 * 3];
           ssize_t bytesRead = recv(current_fd, buffer, sizeof(buffer) - 1, 0);
 
           //错误执行相应的处理
@@ -212,7 +255,7 @@ void Server::run() {
 // 输出
 #ifdef DEBUG
           std::cout << " Received message from client " << client_id << ": "
-                    << buffer << std::endl;
+                    << bytesRead << std::endl;
 #endif
         }
         if (events[i].events & EPOLLOUT) {

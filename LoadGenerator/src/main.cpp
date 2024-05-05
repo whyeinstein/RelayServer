@@ -15,8 +15,8 @@
 #include "LoadGenerator.h"
 #include "Message.h"
 
-// const char *server_ip = "192.168.31.214";
-const char *server_ip = "127.0.0.1";
+const char *server_ip = "192.168.31.214";
+// const char *server_ip = "127.0.0.1";
 int server_port = 8849;
 
 /**
@@ -37,12 +37,14 @@ int main(int argc, char *argv[]) {
 
   std::cout << "请输入端口" << std::endl;
   std::cin >> server_port;
-  size_t max_msg_size = 128 * 1024;  // 10B, 128B, 1K, 16K, 32K, 64K,128K
+  size_t max_msg_size = 16 * 1024;  // 10B, 128B, 1K, 16K, 32K, 64K,128K
   int num_clients = 10000;
   std::cout << "输入客户端数量" << std::endl;
   std::cin >> num_clients;
   std::cout << "输入是否压测" << std::endl;
   std::cin >> is_test;
+  std::cout << "输入循环次数" << std::endl;
+  std::cin >> loop_num;
 
   if (argc > 1) {
     num_clients = std::atoi(argv[1]);

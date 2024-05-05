@@ -17,7 +17,7 @@ Client::Client(const std::string& id, uint8_t messageType, const char* data,
   // 初始化消息，缓冲区大小
   msg_size =
       client_message.getData().size() + sizeof(client_message.getHeader());
-  recv_size = 100 * msg_size;
+  recv_size = 10 * msg_size;
   // recv_buffer.resize(msg_size);
   // send_buffer.resize(msg_size);
 
@@ -147,7 +147,7 @@ void Client::EventLoop(int loop_round) {
             continue;
           }
           // 读取数据
-          char buffer[1024];
+          char buffer[1024 * 129];
           ssize_t bytesRead = recv(client_socket, buffer, sizeof(buffer), 0);
           if (bytesRead <= 0) {
             // 连接已关闭
@@ -273,6 +273,12 @@ void Client::EventLoop(int loop_round) {
 #ifdef DEBUG
   std::cout << id << "终结" << std::endl;
 #endif
+  // // 关闭套接字
+  if (close(client_socket) == -1) {
+    // 打印错误信息
+    std::cerr << "Failed to close the client socket: " << strerror(errno)
+              << std::endl;
+  }
 }
 
 // 修改监听事件

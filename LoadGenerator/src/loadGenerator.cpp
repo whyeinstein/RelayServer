@@ -62,9 +62,12 @@ void LoadGenerator::AddDynamicClient(Client &client, int clients_index,
 }
 
 void LoadGenerator::WaitAll() {
+  int count = 0;
   for (auto &t : client_threads) {
     if (t.joinable()) {
       t.join();
+      count++;
+      std::cout << "已结束线程数" << count << std::endl;
     }
   }
 
