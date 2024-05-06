@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <csignal>
 #include <cstring>
 #include <iostream>
 #include <mutex>
@@ -18,6 +19,18 @@
 const char *server_ip = "192.168.31.214";
 // const char *server_ip = "127.0.0.1";
 int server_port = 8849;
+std::vector<Client> clients;
+
+// 主动停止压力发生器
+void signalHandler(int signal) {
+  uint64_t val = 1;
+  for (auto &c : clients) {
+    if (!c.is_end) {
+      c.is_end = true;
+      write(c.epoll_fd, &val, sizeof(val));
+    }
+  }
+}
 
 /**
  * @brief 压力发生器
@@ -100,11 +113,12 @@ int main(int argc, char *argv[]) {
   }
 
   LoadGenerator load_generator;
-  std::vector<Client> clients;
   std::vector<Client> dynamic_clients;
   auto program_start_time = std::chrono::steady_clock::now();
   auto program_end_time = std::chrono::steady_clock::now();
   std::chrono::duration<double> elapsed_seconds;
+
+  std::signal(SIGTSTP, signalHandler);
 
   // 固定数目客户端
   for (int i = 0; i < num_clients; ++i) {
