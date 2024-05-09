@@ -2,7 +2,7 @@
 #define LOADGENERATOR
 
 #ifndef DEBUG
-// #define DEBUG
+#define DEBUG
 #endif
 
 #include <iomanip>

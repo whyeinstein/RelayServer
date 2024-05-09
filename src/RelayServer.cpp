@@ -10,6 +10,7 @@ int main() {
   std::cout << "请输入端口" << std::endl;
   std::cin >> port;
   Server myServer("192.168.76.128", port);
+  // Server myServer("127.0.0.1", port);
   myServer.run();
   return 0;
 }

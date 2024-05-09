@@ -133,7 +133,13 @@ void Client::EventLoop(int loop_round) {
     std::cout << "客户端" << id << "运行" << std::endl;
 #endif
     // 注意nfds为-1的情况，timeout==-1无限期等待事件发生  ？？？
+    if (is_end) {
+      break;
+    }
     int nfds = epoll_wait(epoll_fd, events, 10, -1);
+    if (is_end) {
+      break;
+    }
     for (int i = 0; i < nfds; i++) {
       // if (id == "0")
 #ifdef DEBUG
@@ -279,6 +285,7 @@ void Client::EventLoop(int loop_round) {
     std::cerr << "Failed to close the client socket: " << strerror(errno)
               << std::endl;
   }
+  is_end = true;
 }
 
 // 修改监听事件

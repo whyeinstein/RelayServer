@@ -2,7 +2,7 @@
 #define REPLY_SERVER
 
 #ifndef DEBUG
-// #define DEBUG
+#define DEBUG
 #endif
 
 #include <arpa/inet.h>

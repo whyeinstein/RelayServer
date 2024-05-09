@@ -83,6 +83,7 @@ class Client {
 
   static bool running;
   int run_num = 0;
+  bool is_end = false;
 };
 
 #endif
