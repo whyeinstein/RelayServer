@@ -147,6 +147,170 @@ void Server::signalHandler(int signum) {
   running = false;
 }
 
+bool Server::NewConnect() {
+  bool continue_flag = false;
+
+  //新连接事件
+  sockaddr_in client_address;
+  socklen_t client_addr_len = sizeof(client_address);
+  int client_socket =
+      accept(server_socket, reinterpret_cast<sockaddr *>(&client_address),
+             &client_addr_len);
+  // #ifdef DEBUG
+  std::cout << "Accepted connection from " << inet_ntoa(client_address.sin_addr)
+            << std::endl;
+  // #endif
+
+  // 接收客户端发送的会话 ID
+  char session_id[64];
+  ssize_t bytesRead =
+      recv(client_socket, session_id, sizeof(session_id) - 1, 0);
+  if (bytesRead <= 0) {
+    // 处理连接断开的情况
+    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_socket, nullptr);
+    close(client_socket);
+    // continue;
+    continue_flag = true;
+    return continue_flag;
+  }
+  session_id[bytesRead] = '\0';
+
+  // 存储会话ID和客户端套接字的映射关系
+  int session_id_int = std::atoi(session_id);
+  sessionMap[client_socket] = session_id_int;
+  rSessionMap[session_id_int] = client_socket;
+  recv_buffers[client_socket] = std::vector<char>();
+  // #ifdef DEBUG
+  std::cout << "注册会话id: " << session_id_int << std::endl;
+  // #endif
+  event.events = EPOLLIN;
+  event.data.fd = client_socket;
+
+  //将客户端套接字添加到 epoll 实例，关注事件为可读
+  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event) == -1) {
+    perror("Error adding client socket to epoll");
+    close(client_socket);
+    // continue;
+    continue_flag = true;
+    return continue_flag;
+  }
+
+  // 发送确认消息
+  const char *ack_msg = "ACK";
+  send(client_socket, ack_msg, strlen(ack_msg), 0);
+
+  int flags = fcntl(client_socket, F_GETFL, 0);
+  if (flags == -1) {
+    throw std::runtime_error("获取文件状态标志失败");
+  }
+  flags |= O_NONBLOCK;
+  if (fcntl(client_socket, F_SETFL, flags) == -1) {
+    throw std::runtime_error("设置文件状态标志失败");
+  }
+  return continue_flag;
+}
+
+bool Server::RecvData(int current_fd) {
+  //数据可读事件
+  int client_id = sessionMap[current_fd];
+
+  // 处理来自客户端的数据
+  char buffer[128 * 1024 * 3];
+  ssize_t bytesRead = recv(current_fd, buffer, sizeof(buffer) - 1, 0);
+
+  //错误执行相应的处理
+  if (bytesRead < 0) {
+    if (errno != EWOULDBLOCK) {
+      std::cerr << "errno:" << errno << "  " << std::strerror(errno)
+                << std::endl;
+    }
+    if (errno == ECONNRESET) {
+      std::cerr << "Connection reset by peer.\n";
+      DelCliSocket(current_fd, client_id);
+      // continue;
+      return true;
+    }
+  } else if (bytesRead == 0) {
+    DelCliSocket(current_fd, client_id);
+    // continue;
+    return true;
+  }
+  // 缓存接收到的数据
+  recv_buffers[current_fd].insert(recv_buffers[current_fd].end(), buffer,
+                                  buffer + bytesRead);
+  // 缓冲区非空，监听写
+  if (!recv_buffers[current_fd].empty()) {
+    ModListen(1, current_fd);
+  }
+  buffer[bytesRead] = '\0';
+
+// 输出
+#ifdef DEBUG
+  std::cout << " Received message from client " << client_id << ": "
+            << bytesRead << std::endl;
+#endif
+  return false;
+}
+
+void Server::SendData(int current_fd) {
+  // 判断对方是否存在
+  int client_id = -1, target_id = -1;
+  client_id = sessionMap[current_fd];
+  target_id = (client_id % 2 == 0)
+                  ? (client_id + 1)
+                  : (client_id - 1);  //偶数加一,奇数减一，获取目标客户端id
+
+  // debug
+  // target_id = 0;
+
+  // 键不存在
+  auto it = rSessionMap.find(target_id);
+  if (it == rSessionMap.end()) {
+    std::string message = "The counterpart is disconnected";
+    Message msg(1, message.c_str(), message.size(), std::to_string(target_id));
+
+    // 序列化并加入缓冲区
+    std::vector<char> data_to_send = msg.serialize();
+    recv_buffers[current_fd].clear();
+    recv_buffers[current_fd].insert(recv_buffers[current_fd].begin(),
+                                    data_to_send.begin(), data_to_send.end());
+    // 将目的id置为当前套接字对应的id
+    target_id = client_id;
+  }
+
+  // ？？？增加判断条件：目的client正常连接???
+  if (!recv_buffers[current_fd].empty()) {
+    ssize_t bytesSent =
+        send(rSessionMap[target_id], recv_buffers[current_fd].data(),
+             recv_buffers[current_fd].size(), MSG_NOSIGNAL);
+#ifdef DEBUG
+    std::cout << client_id << "Sending message to "
+              << " to client " << target_id << std::endl;
+#endif
+    if ((bytesSent) < 0) {
+      if (errno != EWOULDBLOCK) {
+        std::cerr << "发送出错，errno值为: " << errno
+                  << ". 错误信息: " << strerror(errno) << std::endl;
+        if (errno == EPIPE) {
+          // 对方已经关闭了连接，关闭我们的套接字并进行清理
+          //...
+          std::cerr << "对方已经关闭了连接" << std::endl;
+        }
+      }
+    } else {
+      // 删除已发送的数据
+      recv_buffers[current_fd].erase(
+          recv_buffers[current_fd].begin(),
+          recv_buffers[current_fd].begin() + bytesSent);
+
+      // 缓冲区空，取消监听写
+      if (recv_buffers[current_fd].empty()) {
+        ModListen(0, current_fd);
+      }
+    }
+  }
+}
+
 void Server::run() {
   running = true;
   // 注册信号SIGINT和处理函数
@@ -166,162 +330,18 @@ void Server::run() {
     for (int i = 0; i < numEvents; ++i) {
       int current_fd = events[i].data.fd;
       if (current_fd == server_socket) {
-        //新连接事件
-        sockaddr_in client_address;
-        socklen_t client_addr_len = sizeof(client_address);
-        int client_socket =
-            accept(server_socket, reinterpret_cast<sockaddr *>(&client_address),
-                   &client_addr_len);
-        // #ifdef DEBUG
-        std::cout << "Accepted connection from "
-                  << inet_ntoa(client_address.sin_addr) << std::endl;
-        // #endif
-
-        // 接收客户端发送的会话 ID
-        char session_id[64];
-        ssize_t bytesRead =
-            recv(client_socket, session_id, sizeof(session_id) - 1, 0);
-        if (bytesRead <= 0) {
-          // 处理连接断开的情况
-          epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_socket, nullptr);
-          close(client_socket);
+        if (NewConnect()) {
           continue;
-        }
-        session_id[bytesRead] = '\0';
-
-        // 存储会话ID和客户端套接字的映射关系
-        int session_id_int = std::atoi(session_id);
-        sessionMap[client_socket] = session_id_int;
-        rSessionMap[session_id_int] = client_socket;
-        recv_buffers[client_socket] = std::vector<char>();
-        // #ifdef DEBUG
-        std::cout << "注册会话id: " << session_id_int << std::endl;
-        // #endif
-        event.events = EPOLLIN;
-        event.data.fd = client_socket;
-
-        //将客户端套接字添加到 epoll 实例，关注事件为可读
-        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event) == -1) {
-          perror("Error adding client socket to epoll");
-          close(client_socket);
-          continue;
-        }
-
-        // 发送确认消息
-        const char *ack_msg = "ACK";
-        send(client_socket, ack_msg, strlen(ack_msg), 0);
-
-        int flags = fcntl(client_socket, F_GETFL, 0);
-        if (flags == -1) {
-          throw std::runtime_error("获取文件状态标志失败");
-        }
-        flags |= O_NONBLOCK;
-        if (fcntl(client_socket, F_SETFL, flags) == -1) {
-          throw std::runtime_error("设置文件状态标志失败");
         }
       } else {
         if (events[i].events & EPOLLIN) {
-          //数据可读事件
-          int client_id = sessionMap[current_fd];
-
-          // 处理来自客户端的数据
-          char buffer[128 * 1024 * 3];
-          ssize_t bytesRead = recv(current_fd, buffer, sizeof(buffer) - 1, 0);
-
-          //错误执行相应的处理
-          if (bytesRead < 0) {
-            if (errno != EWOULDBLOCK) {
-              std::cerr << "errno:" << errno << "  " << std::strerror(errno)
-                        << std::endl;
-            }
-            if (errno == ECONNRESET) {
-              std::cerr << "Connection reset by peer.\n";
-              DelCliSocket(current_fd, client_id);
-              continue;
-            }
-          } else if (bytesRead == 0) {
-            DelCliSocket(current_fd, client_id);
+          if (RecvData(current_fd)) {
             continue;
           }
-          // 缓存接收到的数据
-          recv_buffers[current_fd].insert(recv_buffers[current_fd].end(),
-                                          buffer, buffer + bytesRead);
-          // 缓冲区非空，监听写
-          if (!recv_buffers[current_fd].empty()) {
-            ModListen(1, current_fd);
-          }
-          buffer[bytesRead] = '\0';
-
-// 输出
-#ifdef DEBUG
-          std::cout << " Received message from client " << client_id << ": "
-                    << bytesRead << std::endl;
-#endif
         }
         if (events[i].events & EPOLLOUT) {
-          // 判断对方是否存在
-          int client_id = -1, target_id = -1;
-          client_id = sessionMap[current_fd];
-          target_id =
-              (client_id % 2 == 0)
-                  ? (client_id + 1)
-                  : (client_id - 1);  //偶数加一,奇数减一，获取目标客户端id
-
-          // debug
-          // target_id = 0;
-
-          // 键不存在
-          auto it = rSessionMap.find(target_id);
-          if (it == rSessionMap.end()) {
-            std::string message = "The counterpart is disconnected";
-            Message msg(1, message.c_str(), message.size(),
-                        std::to_string(target_id));
-
-            // 序列化并加入缓冲区
-            std::vector<char> data_to_send = msg.serialize();
-            recv_buffers[current_fd].clear();
-            recv_buffers[current_fd].insert(recv_buffers[current_fd].begin(),
-                                            data_to_send.begin(),
-                                            data_to_send.end());
-            // 将目的id置为当前套接字对应的id
-            target_id = client_id;
-          }
-
-          // ？？？增加判断条件：目的client正常连接???
-          if (!recv_buffers[current_fd].empty()) {
-            ssize_t bytesSent =
-                send(rSessionMap[target_id], recv_buffers[current_fd].data(),
-                     recv_buffers[current_fd].size(), MSG_NOSIGNAL);
-#ifdef DEBUG
-            std::cout << client_id << "Sending message to "
-                      << " to client " << target_id << std::endl;
-#endif
-            if ((bytesSent) < 0) {
-              if (errno != EWOULDBLOCK) {
-                std::cerr << "发送出错，errno值为: " << errno
-                          << ". 错误信息: " << strerror(errno) << std::endl;
-                if (errno == EPIPE) {
-                  // 对方已经关闭了连接，关闭我们的套接字并进行清理
-                  //...
-                  std::cerr << "对方已经关闭了连接" << std::endl;
-                }
-              }
-            } else {
-              // 删除已发送的数据
-              recv_buffers[current_fd].erase(
-                  recv_buffers[current_fd].begin(),
-                  recv_buffers[current_fd].begin() + bytesSent);
-
-              // 缓冲区空，取消监听写
-              if (recv_buffers[current_fd].empty()) {
-                ModListen(0, current_fd);
-              }
-            }
-          }
+          SendData(current_fd);
         }
-
-        //数据发送给目标客户端
-        // send(rSessionMap[target_id], buffer, bytesRead, 0);
       }
     }
   }
