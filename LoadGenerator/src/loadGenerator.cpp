@@ -67,7 +67,7 @@ void LoadGenerator::WaitAll() {
     if (t.joinable()) {
       t.join();
       count++;
-      std::cout << "已结束线程数" << count << std::endl;
+      // std::cout << "已结束线程数" << count << std::endl;
     }
   }
 

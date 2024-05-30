@@ -1,5 +1,7 @@
 #include "Server.h"
 
+#include <thread>
+
 #include "Message.h"
 
 Server::Server(const char *ip, int port) : server_ip(ip), server_port(port) {
@@ -142,72 +144,76 @@ void Server::DelCliSocket(int current_fd, int client_id) {
   close(current_fd);
 }
 
-void Server::signalHandler(int signum) {
+void Server::SignalHandler(int signum) {
   std::cout << "Interrupt signal (" << signum << ") received.\n";
   running = false;
 }
 
-bool Server::NewConnect() {
-  bool continue_flag = false;
-
-  //新连接事件
+// 新连接事件
+int Server::NewConnect() {
+  // bool continue_flag = false;
   sockaddr_in client_address;
   socklen_t client_addr_len = sizeof(client_address);
   int client_socket =
       accept(server_socket, reinterpret_cast<sockaddr *>(&client_address),
              &client_addr_len);
+  if (client_socket == -1) {
+    perror("Error accepting new connection");
+  }
   // #ifdef DEBUG
   std::cout << "Accepted connection from " << inet_ntoa(client_address.sin_addr)
             << std::endl;
   // #endif
 
-  // 接收客户端发送的会话 ID
-  char session_id[64];
-  ssize_t bytesRead =
-      recv(client_socket, session_id, sizeof(session_id) - 1, 0);
-  if (bytesRead <= 0) {
-    // 处理连接断开的情况
-    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_socket, nullptr);
-    close(client_socket);
-    // continue;
-    continue_flag = true;
-    return continue_flag;
-  }
-  session_id[bytesRead] = '\0';
+  return client_socket;
 
-  // 存储会话ID和客户端套接字的映射关系
-  int session_id_int = std::atoi(session_id);
-  sessionMap[client_socket] = session_id_int;
-  rSessionMap[session_id_int] = client_socket;
-  recv_buffers[client_socket] = std::vector<char>();
-  // #ifdef DEBUG
-  std::cout << "注册会话id: " << session_id_int << std::endl;
-  // #endif
-  event.events = EPOLLIN;
-  event.data.fd = client_socket;
+  // // 接收客户端发送的会话 ID
+  // char session_id[64];
+  // ssize_t bytesRead =
+  //     recv(client_socket, session_id, sizeof(session_id) - 1, 0);
+  // if (bytesRead <= 0) {
+  //   // 处理连接断开的情况
+  //   epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_socket, nullptr);
+  //   close(client_socket);
+  //   // continue;
+  //   continue_flag = true;
+  //   return continue_flag;
+  // }
+  // session_id[bytesRead] = '\0';
 
-  //将客户端套接字添加到 epoll 实例，关注事件为可读
-  if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event) == -1) {
-    perror("Error adding client socket to epoll");
-    close(client_socket);
-    // continue;
-    continue_flag = true;
-    return continue_flag;
-  }
+  // // 存储会话ID和客户端套接字的映射关系
+  // int session_id_int = std::atoi(session_id);
+  // sessionMap[client_socket] = session_id_int;
+  // rSessionMap[session_id_int] = client_socket;
+  // recv_buffers[client_socket] = std::vector<char>();
+  // // #ifdef DEBUG
+  // std::cout << "注册会话id: " << session_id_int << std::endl;
+  // // #endif
+  // event.events = EPOLLIN;
+  // event.data.fd = client_socket;
 
-  // 发送确认消息
-  const char *ack_msg = "ACK";
-  send(client_socket, ack_msg, strlen(ack_msg), 0);
+  // //将客户端套接字添加到 epoll 实例，关注事件为可读
+  // if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event) == -1) {
+  //   perror("Error adding client socket to epoll");
+  //   close(client_socket);
+  //   // continue;
+  //   continue_flag = true;
+  //   return continue_flag;
+  // }
 
-  int flags = fcntl(client_socket, F_GETFL, 0);
-  if (flags == -1) {
-    throw std::runtime_error("获取文件状态标志失败");
-  }
-  flags |= O_NONBLOCK;
-  if (fcntl(client_socket, F_SETFL, flags) == -1) {
-    throw std::runtime_error("设置文件状态标志失败");
-  }
-  return continue_flag;
+  // // 发送确认消息
+  // const char *ack_msg = "ACK";
+  // send(client_socket, ack_msg, strlen(ack_msg), 0);
+
+  // int flags = fcntl(client_socket, F_GETFL, 0);
+  // if (flags == -1) {
+  //   throw std::runtime_error("获取文件状态标志失败");
+  // }
+  // flags |= O_NONBLOCK;
+  // if (fcntl(client_socket, F_SETFL, flags) == -1) {
+  //   throw std::runtime_error("设置文件状态标志失败");
+  // }
+  // return continue_flag;
 }
 
 bool Server::RecvData(int current_fd) {
@@ -311,11 +317,16 @@ void Server::SendData(int current_fd) {
   }
 }
 
-void Server::run() {
+void Server::Run() {
   running = true;
+
   // 注册信号SIGINT和处理函数
-  signal(SIGINT, signalHandler);
+  signal(SIGINT, SignalHandler);
   epoll_event events[MAX_EVENTS];
+
+  // 注册副线程处理新连接
+  std::thread connection_thread(&Server::ConnectionHandler, this);
+
   while (running) {
     //使用epoll_wait函数等待事件的发生，将事件存储在events数组中
     int numEvents = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
@@ -330,9 +341,17 @@ void Server::run() {
     for (int i = 0; i < numEvents; ++i) {
       int current_fd = events[i].data.fd;
       if (current_fd == server_socket) {
-        if (NewConnect()) {
-          continue;
+        int new_fd = NewConnect();
+        if (new_fd != -1) {
+          std::unique_lock<std::mutex> lock(queue_mutex);
+          new_connections.push(new_fd);
+          lock.unlock();
+          queue_cv.notify_one();
         }
+        continue;
+        // if (NewConnect()) {
+        //   continue;
+        // }
       } else {
         if (events[i].events & EPOLLIN) {
           if (RecvData(current_fd)) {
@@ -343,6 +362,71 @@ void Server::run() {
           SendData(current_fd);
         }
       }
+    }
+  }
+}
+
+void Server::ConnectionHandler() {
+  while (running) {
+    std::unique_lock<std::mutex> lock(queue_mutex);
+    queue_cv.wait(lock,
+                  [this] { return !new_connections.empty() || !running; });
+#ifdef DEBUG
+    std::cout << "副线程唤醒" << std::endl;
+#endif
+
+    while (!new_connections.empty()) {
+#ifdef DEBUG
+      std::cout << "处理新连接" << std::endl;
+#endif
+      int client_socket = new_connections.front();
+      new_connections.pop();
+      lock.unlock();
+
+      // 处理新连接
+      // 接收客户端发送的会话 ID
+      char session_id[64];
+      ssize_t bytesRead =
+          recv(client_socket, session_id, sizeof(session_id) - 1, 0);
+      if (bytesRead <= 0) {
+        // 处理连接断开的情况
+        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_socket, nullptr);
+        close(client_socket);
+        continue;
+      }
+      session_id[bytesRead] = '\0';
+
+      // 存储会话ID和客户端套接字的映射关系
+      int session_id_int = std::atoi(session_id);
+      sessionMap[client_socket] = session_id_int;
+      rSessionMap[session_id_int] = client_socket;
+      recv_buffers[client_socket] = std::vector<char>();
+      // #ifdef DEBUG
+      std::cout << "注册会话id: " << session_id_int << std::endl;
+      // #endif
+      event.events = EPOLLIN;
+      event.data.fd = client_socket;
+
+      //将客户端套接字添加到 epoll 实例，关注事件为可读
+      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_socket, &event) == -1) {
+        perror("Error adding client socket to epoll");
+        close(client_socket);
+        continue;
+      }
+
+      // 发送确认消息
+      const char *ack_msg = "ACK";
+      send(client_socket, ack_msg, strlen(ack_msg), 0);
+
+      int flags = fcntl(client_socket, F_GETFL, 0);
+      if (flags == -1) {
+        throw std::runtime_error("获取文件状态标志失败");
+      }
+      flags |= O_NONBLOCK;
+      if (fcntl(client_socket, F_SETFL, flags) == -1) {
+        throw std::runtime_error("设置文件状态标志失败");
+      }
+      lock.lock();
     }
   }
 }

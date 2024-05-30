@@ -137,6 +137,10 @@ void Client::EventLoop(int loop_round) {
       break;
     }
     int nfds = epoll_wait(epoll_fd, events, 10, -1);
+    if (nfds == -1) {
+      perror("error when epoll wait!");
+      break;
+    }
     if (is_end) {
       break;
     }

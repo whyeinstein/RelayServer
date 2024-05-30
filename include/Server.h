@@ -2,7 +2,7 @@
 #define REPLY_SERVER
 
 #ifndef DEBUG
-#define DEBUG
+// #define DEBUG
 #endif
 
 #include <arpa/inet.h>
@@ -12,9 +12,12 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <csignal>
 #include <cstring>
 #include <iostream>
+#include <mutex>
+#include <queue>
 #include <unordered_map>
 #include <vector>
 
@@ -30,14 +33,26 @@ class Server {
   void DelCliSocket(int current_fd, int client_id);
 
   // 捕获信号
-  static void signalHandler(int signum);
+  static void SignalHandler(int signum);
 
   // 服务器运行
-  void run();
+  void Run();
+
+  // 服务器处理新连接
+  int NewConnect();
+
+  // 接受数据
+  bool RecvData(int current_fd);
+
+  // 发送数据
+  void SendData(int current_fd);
+
+  // 新
+  void ConnectionHandler();
 
  private:
   const char *server_ip;
-  const int MAX_EVENTS = 10000;
+  const int MAX_EVENTS = 20000;
   int server_port;
   int server_socket;
   int epoll_fd = -1;
@@ -49,5 +64,8 @@ class Server {
   size_t buf_size = 22 * 1024;  // 缓存区大小
   epoll_event listen_ev[2];     // 两种监听模式
   static bool running;
+  std::queue<int> new_connections;   // 新连接队列
+  std::mutex queue_mutex;            // 队列锁
+  std::condition_variable queue_cv;  // 新连接条件变量
 };
 #endif
